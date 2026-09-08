@@ -8,8 +8,8 @@
           ".validate": "newData.hasChildren(['temp', 'hum', 'ts'])"
         },
         "hourly": {
+          ".read": true,
           "$hour": {
-            ".read": true,
             ".write": "auth != null",
             ".validate": "newData.hasChildren(['temp', 'hum', 'count'])"
           }
