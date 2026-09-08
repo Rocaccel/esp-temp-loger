@@ -5,11 +5,14 @@ import pytest
 from fbsync import (
     acc_add,
     acc_mean,
+    auth_error_hint,
     build_bucket_payload,
     build_current_payload,
     decode_rtc_state,
+    describe_http_error,
     encode_rtc_state,
     ensure_id_token,
+    extract_error_message,
     needs_refresh,
     new_acc,
     new_state,
@@ -153,3 +156,34 @@ def test_rtc_decode_garbage() -> None:
     assert decode_rtc_state(None) == new_state()
     assert decode_rtc_state(b"not json") == new_state()
     assert decode_rtc_state('{"tz": 1}'.encode("utf-8")) == new_state()
+
+
+def test_extract_error_message() -> None:
+    """Текст ошибки извлекается из тела ответа Firebase."""
+    assert extract_error_message({"error": {"message": "OPERATION_NOT_ALLOWED"}}) == (
+        "OPERATION_NOT_ALLOWED"
+    )
+    assert extract_error_message({}) == ""
+    assert extract_error_message({"error": "plain"}) == "plain"
+    assert extract_error_message({"error": {"message": "x" * 200}}) == "x" * 160
+
+
+def test_describe_http_error() -> None:
+    """Текст HTTP-ошибки включает код и тело."""
+    assert describe_http_error(400, "OPERATION_NOT_ALLOWED") == ("HTTP 400: OPERATION_NOT_ALLOWED")
+    assert describe_http_error(401, "") == "HTTP 401"
+
+
+def test_auth_error_hint_known() -> None:
+    """Известные ошибки получают подсказки."""
+    assert "Anonymous" in auth_error_hint("HTTP 400: OPERATION_NOT_ALLOWED")
+    assert "signup" in auth_error_hint("TOKEN_EXPIRED")
+    assert "signup" in auth_error_hint("USER_NOT_FOUND")
+    assert "signup" in auth_error_hint("INVALID_REFRESH_TOKEN")
+    assert "signup" in auth_error_hint("INVALID_ID_TOKEN")
+
+
+def test_auth_error_hint_unknown() -> None:
+    """Неизвестные ошибки без подсказок."""
+    assert auth_error_hint("SOMETHING_ELSE") == ""
+    assert auth_error_hint("") == ""

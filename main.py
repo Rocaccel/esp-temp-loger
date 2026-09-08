@@ -19,11 +19,14 @@ import secrets
 from fbsync import (
     acc_add,
     acc_mean,
+    auth_error_hint,
     build_bucket_payload,
     build_current_payload,
     decode_rtc_state,
+    describe_http_error,
     encode_rtc_state,
     ensure_id_token,
+    extract_error_message,
     new_acc,
     new_state,
     node_url,
@@ -139,6 +142,24 @@ def ntp_sync() -> bool:
         return False
 
 
+def read_error_message(resp) -> str:
+    """Извлекает текст ошибки Firebase из ответа.
+
+    Args:
+        resp: Ответ urequests.
+
+    Returns:
+        Текст message или пустая строка.
+    """
+    try:
+        data = resp.json()
+    except (ValueError, OSError, AttributeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return extract_error_message(data)
+
+
 def _post(url: str, payload: dict) -> dict:
     """POST JSON с проверкой статуса.
 
@@ -156,10 +177,9 @@ def _post(url: str, payload: dict) -> dict:
     resp = urequests.post(url, json=payload)
     try:
         code = resp.status_code
-        data = resp.json() if code < 400 else {}
         if code >= 400:
-            raise OSError(f"HTTP {code}")
-        return data
+            raise OSError(describe_http_error(code, read_error_message(resp)))
+        return resp.json()
     finally:
         try:
             resp.close()
@@ -184,10 +204,9 @@ def _put(url: str, payload: dict) -> dict:
     resp = urequests.put(url, json=payload)
     try:
         code = resp.status_code
-        data = resp.json() if code < 400 else {}
         if code >= 400:
-            raise OSError(f"HTTP {code}")
-        return data
+            raise OSError(describe_http_error(code, read_error_message(resp)))
+        return resp.json()
     finally:
         try:
             resp.close()
@@ -207,8 +226,9 @@ def _delete(url: str) -> None:
     assert urequests is not None
     resp = urequests.delete(url)
     try:
-        if resp.status_code >= 400:
-            raise OSError(f"HTTP {resp.status_code}")
+        code = resp.status_code
+        if code >= 400:
+            raise OSError(describe_http_error(code, read_error_message(resp)))
     finally:
         try:
             resp.close()
@@ -273,7 +293,15 @@ def run_cycle() -> None:
     try:
         token = ensure_id_token(_post, secrets.FIREBASE_API_KEY, state, now_unix)
     except (OSError, ValueError) as error:
-        print(f"[FB-ERR] Auth: {error}")
+        hint = auth_error_hint(str(error))
+        if hint:
+            print(f"[FB-ERR] Auth: {error} ({hint})")
+        else:
+            print(f"[FB-ERR] Auth: {error}")
+        # Битый refresh-токен иначе крутился бы вечно — сброс к signup.
+        state["id_token"] = ""
+        state["refresh_token"] = ""
+        state["expires_at"] = 0
         save_state(state)
         sleep_now()
         return

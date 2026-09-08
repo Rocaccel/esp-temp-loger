@@ -282,3 +282,60 @@ def test_cycle_urequests_missing(monkeypatch) -> None:
     monkeypatch.setattr(main, "urequests", None)
     main.run_cycle()
     assert machine.sleep_calls == [60000]
+
+
+def test_post_error_includes_body() -> None:
+    """Текст ошибки Firebase попадает в исключение."""
+    import urequests
+
+    urequests.route("POST", "identitytoolkit", 400, {"error": {"message": "OPERATION_X"}})
+    with pytest.raises(OSError, match="HTTP 400: OPERATION_X"):
+        main._post("https://identitytoolkit/foo", {})
+
+
+def test_read_error_message_defensive() -> None:
+    """Не-JSON и не-dict ответы дают пустую строку без падения."""
+
+    class ListResp:
+        status_code = 500
+
+        def json(self) -> list:
+            return [1, 2]
+
+        def close(self) -> None:
+            return None
+
+    class BadResp:
+        status_code = 500
+
+        def json(self) -> dict:
+            raise ValueError("nope")
+
+        def close(self) -> None:
+            return None
+
+    assert main.read_error_message(ListResp()) == ""
+    assert main.read_error_message(BadResp()) == ""
+
+
+def test_cycle_bad_refresh_clears_tokens() -> None:
+    """Битый refresh-токен сбрасывается к signup на следующем цикле."""
+    import machine
+    import urequests
+
+    urequests.route("POST", "securetoken", 400, {"error": {"message": "INVALID_REFRESH_TOKEN"}})
+    state = fbsync.new_state()
+    state["refresh_token"] = "rf-bad"
+    state["id_token"] = "id-old"
+    state["expires_at"] = 100.0
+    state["time_valid"] = True
+    machine.RTC._memory = fbsync.encode_rtc_state(state).encode("utf-8")
+    machine._reset_cause = machine.DEEPSLEEP_RESET
+
+    main.run_cycle()
+
+    assert [c for c in urequests.calls if c["method"] == "PUT"] == []
+    assert machine.sleep_calls == [60000]
+    saved = fbsync.decode_rtc_state(machine.RTC._memory)
+    assert saved["refresh_token"] == ""
+    assert saved["id_token"] == ""

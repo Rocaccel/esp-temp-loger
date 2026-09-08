@@ -159,6 +159,58 @@ def parse_auth_response(data: dict, now: float) -> dict:
     }
 
 
+def extract_error_message(data: dict) -> str:
+    """Извлекает текст ошибки Firebase из тела ответа.
+
+    Args:
+        data: Распарсенное тело ответа (ошибка лежит в data['error']).
+
+    Returns:
+        Текст message обрезанный до 160 символов или пустая строка.
+    """
+    error = data.get("error", {})
+    if isinstance(error, dict):
+        return str(error.get("message", ""))[:160]
+    return str(error)[:160]
+
+
+def auth_error_hint(message: str) -> str:
+    """Подбирает подсказку по тексту ошибки Auth API.
+
+    Args:
+        message: Текст ошибки Firebase (например OPERATION_NOT_ALLOWED).
+
+    Returns:
+        Подсказка для serial-лога или пустая строка.
+    """
+    hints = (
+        ("OPERATION_NOT_ALLOWED", "включи Anonymous-провайдер в Authentication"),
+        ("INVALID_ID_TOKEN", "токен отклонён, будет новый signup"),
+        ("USER_NOT_FOUND", "пользователь удалён, будет новый signup"),
+        ("TOKEN_EXPIRED", "токен протух, будет новый signup"),
+        ("INVALID_REFRESH_TOKEN", "refresh-токен бит, будет новый signup"),
+    )
+    for key, hint in hints:
+        if key in message:
+            return hint
+    return ""
+
+
+def describe_http_error(code: int, message: str) -> str:
+    """Строит текст HTTP-ошибки для лога.
+
+    Args:
+        code: HTTP-статус.
+        message: Текст ошибки из тела ответа (может быть пустым).
+
+    Returns:
+        Строка вида 'HTTP 400: OPERATION_NOT_ALLOWED' или 'HTTP 400'.
+    """
+    if message:
+        return f"HTTP {code}: {message}"
+    return f"HTTP {code}"
+
+
 def needs_refresh(state: dict, now: float) -> bool:
     """Проверяет, нужно ли обновить токен.
 
