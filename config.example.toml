@@ -1,0 +1,17 @@
+# Образец конфигурации. Скопируй в config.toml и впиши свои значения.
+# Генерация файла для платы: uv run python tools/gen_secrets.py
+
+[wifi]
+ssid = "MyWiFi"
+password = "secret"
+
+[firebase]
+api_key = "AIza..."
+database_url = "https://<project>-default-rtdb.firebaseio.com"
+device_id = "esp32-1"
+
+[power]
+sleep_sec = 60
+
+[device]
+mdns_hostname = "temp-logger"

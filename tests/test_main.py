@@ -1,211 +1,124 @@
-"""Тесты main.py через стабы MicroPython (network, machine, dht, _thread)."""
+"""Тесты main.py: Wi-Fi, NTP, mDNS и deep-sleep цикл через стабы."""
 
-import json
 import sys
 
 import pytest
 
+import fbsync
 import main
-from telemetry import trim_history
+from telemetry import hour_start_ts, to_unix_ts
 
 
-class FakeSocket:
-    """Фейковый клиентский сокет для проверки ответов сервера."""
+@pytest.fixture(autouse=True)
+def _reset_hw_stubs():
+    """Сбрасывает состояние железных стабов перед каждым тестом."""
+    import machine
+    import urequests
 
-    def __init__(self, request_text: str) -> None:
-        """Сохраняет текст запроса и готовит буфер отправки.
-
-        Args:
-            request_text: Сырой HTTP-запрос от «клиента».
-        """
-        self._request = request_text.encode()
-        self.sent = b""
-        self.closed = False
-
-    def recv(self, size: int) -> bytes:
-        """Возвращает заранее заданный запрос.
-
-        Args:
-            size: Размер чтения (игнорируется).
-
-        Returns:
-            Байты запроса.
-        """
-        return self._request
-
-    def send(self, data: bytes) -> int:
-        """Копит отправленные байты.
-
-        Args:
-            data: Часть ответа.
-
-        Returns:
-            Число принятых байтов.
-        """
-        self.sent += data
-        return len(data)
-
-    def close(self) -> None:
-        """Помечает сокет закрытым."""
-        self.closed = True
-
-    def getpeername(self) -> tuple:
-        """Возвращает фиктивный адрес клиента.
-
-        Returns:
-            Кортеж (ip, port).
-        """
-        return ("127.0.0.1", 1234)
+    machine.RTC._memory = b""
+    machine.sleep_calls.clear()
+    machine._reset_cause = machine.PWRON_RESET
+    urequests.reset()
+    yield
 
 
-def _response_parts(sock: FakeSocket) -> tuple:
-    """Разбирает отправленный ответ на заголовок и тело.
+def _signup_route() -> None:
+    """Настраивает успешный анонимный signup."""
+    import urequests
 
-    Args:
-        sock: Фейковый сокет после обработки.
-
-    Returns:
-        Кортеж (заголовок строкой, тело байтами).
-    """
-    header_bytes, _, body = sock.sent.partition(b"\r\n\r\n")
-    return header_bytes.decode("ascii"), body
-
-
-def test_data_route_returns_json() -> None:
-    """Маршрут /data отдаёт JSON с историей и часовыми точками."""
-    main.telemetry_history.clear()
-    main.hourly_history.clear()
-    main.telemetry_history.append({"time": 1, "temp": 21.5, "hum": 52.0})
-    main.hourly_history.append({"time": 0, "temp": 21.0, "hum": 51.0, "count": 1})
-    sock = FakeSocket("GET /data HTTP/1.1\r\nHost: x\r\n\r\n")
-    main.process_client_connection(sock)
-    header, body = _response_parts(sock)
-    assert "200 OK" in header
-    assert "application/json" in header
-    payload = json.loads(body.decode("utf-8"))
-    assert payload["temp"] == 21.5
-    assert payload["hum"] == 52.0
-    assert payload["hourly"] == [{"time": 946684800, "temp": 21.0, "hum": 51.0, "count": 1}]
-    assert sock.closed
+    urequests.route(
+        "POST",
+        "identitytoolkit",
+        200,
+        {"idToken": "id1", "refreshToken": "rf1", "expiresIn": "3600"},
+    )
 
 
-def test_root_route_returns_html_with_charset() -> None:
-    """Маршрут / отдаёт HTML с указанием кодировки."""
-    sock = FakeSocket("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
-    main.process_client_connection(sock)
-    header, body = _response_parts(sock)
-    assert "200 OK" in header
-    assert "text/html; charset=utf-8" in header
-    assert "Климат-монитор".encode("utf-8") in body
-    assert sock.closed
+def _fresh_rtc() -> None:
+    """Кладёт в RTC валидное состояние с далёким токеном."""
+    import machine
+
+    state = fbsync.new_state()
+    state["refresh_token"] = "rf0"
+    state["id_token"] = "id0"
+    state["expires_at"] = 9000000000
+    state["time_valid"] = True
+    machine.RTC._memory = fbsync.encode_rtc_state(state).encode("utf-8")
 
 
-def test_unknown_route_returns_404() -> None:
-    """Неизвестный путь (напр. /favicon.ico) даёт 404, а не HTML."""
-    sock = FakeSocket("GET /favicon.ico HTTP/1.1\r\nHost: x\r\n\r\n")
-    main.process_client_connection(sock)
-    header, _ = _response_parts(sock)
-    assert "404 Not Found" in header
-    assert sock.closed
+def _ntp_spy(monkeypatch) -> dict:
+    """Подменяет ntptime.settime счётчиком вызовов."""
+    import ntptime
 
+    calls = {"count": 0}
 
-def test_content_length_matches_utf8_bytes() -> None:
-    """Content-Length ответа равен длине UTF-8 байтов тела."""
-    sock = FakeSocket("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
-    main.process_client_connection(sock)
-    header, body = _response_parts(sock)
-    assert f"Content-Length: {len(body)}" in header
+    def _fake_settime() -> None:
+        calls["count"] += 1
+
+    monkeypatch.setattr(ntptime, "settime", _fake_settime)
+    return calls
 
 
 def test_wifi_empty_ssid_rejected() -> None:
     """Пустой SSID отклоняется сразу."""
     with pytest.raises(ValueError, match="SSID"):
-        main.connect_to_wifi_network("", "pass", timeout_sec=1)
+        main.wifi_connect("", "pass", timeout_sec=1)
 
 
 def test_wifi_bad_timeout_rejected() -> None:
     """Некорректный таймаут отклоняется."""
     with pytest.raises(ValueError, match="timeout_sec"):
-        main.connect_to_wifi_network("ssid", "pass", timeout_sec=0)
+        main.wifi_connect("ssid", "pass", timeout_sec=0)
 
 
 def test_wifi_connect_success_via_stub() -> None:
     """Подключение через стаб network возвращает IP стаба."""
-    assert main.connect_to_wifi_network("ssid", "pass", timeout_sec=2) == "192.168.1.100"
+    assert main.wifi_connect("ssid", "pass", timeout_sec=2) == "192.168.1.100"
 
 
 def test_mdns_hostname_set_before_active() -> None:
-    """Hostname задаётся до поднятия интерфейса (иначе mDNS его не подхватит)."""
+    """Hostname задаётся до поднятия интерфейса."""
     import network
 
     network.events.clear()
-    main.connect_to_wifi_network("ssid", "pass", timeout_sec=2)
+    main.wifi_connect("ssid", "pass", timeout_sec=2)
     assert network.events.index("hostname") < network.events.index("active")
     assert network.hostname() == "temp-logger"
 
 
 def test_mdns_hostname_value_valid() -> None:
-    """Имя совместимо с mDNS: без точек, пробелов и в лимите 32 символов."""
-    assert "." not in main.MDNS_HOSTNAME
-    assert " " not in main.MDNS_HOSTNAME
-    assert 1 <= len(main.MDNS_HOSTNAME) <= 32
+    """Имя из secrets совместимо с mDNS."""
+    from tests.stubs import secrets as stub_secrets
+
+    assert "." not in stub_secrets.MDNS_HOSTNAME
+    assert " " not in stub_secrets.MDNS_HOSTNAME
+    assert 1 <= len(stub_secrets.MDNS_HOSTNAME) <= 32
 
 
 def test_wifi_without_hostname_support(monkeypatch) -> None:
-    """На старой прошивке без network.hostname подключение всё равно работает."""
+    """На старой прошивке подключение работает без hostname."""
     import network
 
     def _no_hostname(name: str) -> str:
         raise AttributeError("no hostname")
 
     monkeypatch.setattr(network, "hostname", _no_hostname)
-    assert main.connect_to_wifi_network("ssid", "pass", timeout_sec=2) == "192.168.1.100"
-
-
-def test_append_telemetry_point_trims() -> None:
-    """Добавление точки обрезает историю до лимита."""
-    history: list = [{"i": i} for i in range(5)]
-    main.append_telemetry_point(history, {"i": 5}, 3)
-    assert history == [{"i": 3}, {"i": 4}, {"i": 5}]
-    assert trim_history(history, 60) == history
-
-
-def test_hourly_history_save_load_roundtrip(tmp_path) -> None:
-    """Часовая история переживает запись/чтение файла."""
-    file_path = str(tmp_path / "hourly.json")
-    hourly = [
-        {"time": 3600, "temp": 21.5, "hum": 52.0, "count": 12},
-        {"time": 7200, "temp": 22.0, "hum": 53.0, "count": 12},
-    ]
-    assert main.save_hourly_history(file_path, hourly) is True
-    assert main.load_hourly_history(file_path) == hourly
-
-
-def test_hourly_history_load_missing_file(tmp_path) -> None:
-    """Отсутствующий файл даёт пустую историю без ошибок."""
-    assert main.load_hourly_history(str(tmp_path / "nope.json")) == []
-
-
-def test_hourly_history_load_corrupted_file(tmp_path) -> None:
-    """Повреждённый файл даёт пустую историю без ошибок."""
-    file_path = tmp_path / "hourly.json"
-    file_path.write_text("не json", encoding="utf-8")
-    assert main.load_hourly_history(str(file_path)) == []
+    assert main.wifi_connect("ssid", "pass", timeout_sec=2) == "192.168.1.100"
 
 
 def test_sync_time_ntp_success_via_stub() -> None:
-    """Со стабом ntptime синхронизация считается успешной."""
-    assert main.sync_time_ntp() is True
+    """Со стабом ntptime синхронизация успешна."""
+    assert main.ntp_sync() is True
 
 
 def test_sync_time_ntp_no_module(monkeypatch) -> None:
-    """Без модуля ntptime синхронизация возвращает False."""
+    """Без модуля ntptime возвращается False."""
     monkeypatch.setitem(sys.modules, "ntptime", None)
-    assert main.sync_time_ntp() is False
+    assert main.ntp_sync() is False
 
 
 def test_sync_time_ntp_network_error(monkeypatch) -> None:
-    """Ошибка сети при синхронизации возвращает False."""
+    """Ошибка сети возвращает False."""
     import types
 
     fake = types.ModuleType("ntptime")
@@ -215,109 +128,157 @@ def test_sync_time_ntp_network_error(monkeypatch) -> None:
 
     monkeypatch.setattr(fake, "settime", _fail, raising=False)
     monkeypatch.setitem(sys.modules, "ntptime", fake)
-    assert main.sync_time_ntp() is False
+    assert main.ntp_sync() is False
 
 
-def test_settings_save_load_roundtrip(tmp_path) -> None:
-    """Поправка переживает запись/чтение файла."""
-    file_path = str(tmp_path / "settings.json")
-    assert main.save_settings(file_path, 5) is True
-    assert main.load_settings(file_path) == 5
-
-
-def test_settings_save_rejects_out_of_range(tmp_path) -> None:
-    """Поправка вне -12..+14 не сохраняется."""
-    file_path = str(tmp_path / "settings.json")
-    assert main.save_settings(file_path, 99) is False
-    assert main.save_settings(file_path, -13) is False
-
-
-def test_settings_load_missing_file(tmp_path) -> None:
-    """Отсутствующий файл даёт поправку по умолчанию."""
-    assert main.load_settings(str(tmp_path / "nope.json")) == 0
-
-
-def test_settings_load_corrupted_file(tmp_path) -> None:
-    """Повреждённый файл даёт поправку по умолчанию."""
-    file_path = tmp_path / "settings.json"
-    file_path.write_text("не json", encoding="utf-8")
-    assert main.load_settings(str(file_path)) == 0
-
-
-def test_settings_load_out_of_range_value(tmp_path) -> None:
-    """Значение вне диапазона в файле игнорируется."""
-    file_path = tmp_path / "settings.json"
-    file_path.write_text('{"tz_offset": 50}', encoding="utf-8")
-    assert main.load_settings(str(file_path)) == 0
-
-
-def test_format_tz_sign() -> None:
-    """Поправка форматируется со знаком."""
-    assert main.format_tz_sign(3) == "+3"
-    assert main.format_tz_sign(-5) == "-5"
-    assert main.format_tz_sign(0) == "+0"
-
-
-def test_settings_route_saves_tz(monkeypatch, tmp_path) -> None:
-    """GET /settings?tz=5 сохраняет поправку и отвечает 200."""
-    monkeypatch.setattr(main, "SETTINGS_FILE", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(main, "tz_offset_hours", 0)
-    sock = FakeSocket("GET /settings?tz=5 HTTP/1.1\r\nHost: x\r\n\r\n")
-    main.process_client_connection(sock)
-    header, body = _response_parts(sock)
-    assert "200 OK" in header
-    assert "+5" in body.decode("utf-8")
-    assert main.tz_offset_hours == 5
-    assert main.load_settings(str(tmp_path / "settings.json")) == 5
-
-
-def test_settings_route_rejects_bad_tz(monkeypatch, tmp_path) -> None:
-    """Некорректная поправка даёт 400 и не меняет текущую."""
-    monkeypatch.setattr(main, "SETTINGS_FILE", str(tmp_path / "settings.json"))
-    monkeypatch.setattr(main, "tz_offset_hours", 3)
-    for target in (
-        "GET /settings?tz=99 HTTP/1.1",
-        "GET /settings?tz=abc HTTP/1.1",
-        "GET /settings HTTP/1.1",
-    ):
-        sock = FakeSocket(target + "\r\nHost: x\r\n\r\n")
-        main.process_client_connection(sock)
-        header, _ = _response_parts(sock)
-        assert "400 Bad Request" in header
-    assert main.tz_offset_hours == 3
-
-
-def test_data_route_includes_tz_offset(monkeypatch) -> None:
-    """Маршрут /data отдаёт поправку часового пояса."""
-    monkeypatch.setattr(main, "tz_offset_hours", 7)
-    main.telemetry_history.clear()
-    main.hourly_history.clear()
-    sock = FakeSocket("GET /data HTTP/1.1\r\nHost: x\r\n\r\n")
-    main.process_client_connection(sock)
-    _, body = _response_parts(sock)
-    assert json.loads(body.decode("utf-8"))["tz_offset"] == 7
-
-
-def test_power_profile_disabled_by_default() -> None:
-    """Без BATTERY_MODE профиль ничего не трогает."""
+def test_is_deep_wake_true() -> None:
+    """Флаг deep-пробуждения распознаётся."""
     import machine
-    import network
 
-    machine.applied_freq = None
-    wlan = network.WLAN(network.STA_IF)
-    main.apply_power_profile(wlan)
-    assert machine.applied_freq is None
-    assert wlan.pm_mode is None
+    machine._reset_cause = machine.DEEPSLEEP_RESET
+    assert main.is_deep_wake() is True
 
 
-def test_power_profile_battery_mode(monkeypatch) -> None:
-    """В BATTERY_MODE снижаются частота CPU и включается modem sleep."""
+def test_is_deep_wake_fallback(monkeypatch) -> None:
+    """Без константы прошивки считается холодным стартом."""
     import machine
-    import network
 
-    monkeypatch.setattr(main, "BATTERY_MODE", True)
-    machine.applied_freq = None
-    wlan = network.WLAN(network.STA_IF)
-    main.apply_power_profile(wlan)
-    assert machine.applied_freq == 80000000
-    assert wlan.pm_mode == 0xA11140
+    monkeypatch.delattr(machine, "DEEPSLEEP_RESET")
+    assert main.is_deep_wake() is False
+
+
+def test_cycle_cold_boot_full(monkeypatch) -> None:
+    """Холодный старт: NTP + signup + PUT current/hourly + сон."""
+    import machine
+    import urequests
+
+    ntp = _ntp_spy(monkeypatch)
+    _signup_route()
+    main.run_cycle()
+
+    assert machine.sleep_calls == [60000]
+    assert ntp["count"] == 1
+    posts = [c for c in urequests.calls if c["method"] == "POST"]
+    puts = [c for c in urequests.calls if c["method"] == "PUT"]
+    assert len(posts) == 1 and "identitytoolkit" in posts[0]["url"]
+    assert len(puts) == 2
+    assert any("/current.json?auth=id1" in c["url"] for c in puts)
+    assert any("/hourly/" in c["url"] and "?auth=id1" in c["url"] for c in puts)
+
+    state = fbsync.decode_rtc_state(machine.RTC._memory)
+    assert state["refresh_token"] == "rf1"
+    assert state["acc"]["n"] == 1
+    assert state["time_valid"] is True
+
+
+def test_cycle_deep_wake_skips_ntp_and_auth(monkeypatch) -> None:
+    """Пробуждение: без NTP и без лишнего auth, только PUT."""
+    import machine
+    import urequests
+
+    ntp = _ntp_spy(monkeypatch)
+    machine._reset_cause = machine.DEEPSLEEP_RESET
+    _fresh_rtc()
+    main.run_cycle()
+
+    assert machine.sleep_calls == [60000]
+    assert ntp["count"] == 0
+    assert [c for c in urequests.calls if c["method"] == "POST"] == []
+    puts = [c for c in urequests.calls if c["method"] == "PUT"]
+    assert len(puts) == 2
+    assert all("?auth=id0" in c["url"] for c in puts)
+
+
+def test_cycle_sensor_failure_sleeps() -> None:
+    """При ошибке датчика сети нет, но сон обязателен."""
+    import machine
+    import urequests
+
+    class FailSensor:
+        def measure(self) -> None:
+            raise OSError("dht fail")
+
+    old_sensor = main.sensor
+    main.sensor = FailSensor()
+    try:
+        main.run_cycle()
+    finally:
+        main.sensor = old_sensor
+    assert urequests.calls == []
+    assert machine.sleep_calls == [60000]
+
+
+def test_cycle_no_time_skips_send(monkeypatch) -> None:
+    """Без точного времени отправки нет, сон есть."""
+    import types
+
+    import machine
+    import urequests
+
+    fake = types.ModuleType("ntptime")
+
+    def _fail() -> None:
+        raise OSError("no network")
+
+    monkeypatch.setattr(fake, "settime", _fail, raising=False)
+    monkeypatch.setitem(sys.modules, "ntptime", fake)
+    main.run_cycle()
+
+    assert [c for c in urequests.calls if "firebaseio" in c["url"]] == []
+    assert [c for c in urequests.calls if c["method"] == "PUT"] == []
+    assert machine.sleep_calls == [60000]
+    state = fbsync.decode_rtc_state(machine.RTC._memory)
+    assert state["time_valid"] is False
+
+
+def test_cycle_auth_error_sleeps() -> None:
+    """Ошибка Auth: PUT нет, состояние сохранено, сон есть."""
+    import machine
+    import urequests
+
+    urequests.route("POST", "identitytoolkit", 400, {})
+    main.run_cycle()
+
+    assert [c for c in urequests.calls if c["method"] == "PUT"] == []
+    assert machine.sleep_calls == [60000]
+    state = fbsync.decode_rtc_state(machine.RTC._memory)
+    assert state["refresh_token"] == ""
+
+
+def test_cycle_rollover_prunes_old_bucket() -> None:
+    """Смена часа: DELETE старого бакета, новый аккумулятор."""
+    import time
+
+    import machine
+    import urequests
+
+    import fbsync as _fb
+
+    now_hour = hour_start_ts(to_unix_ts(time.time()))
+    old_hour = now_hour - 7200
+    state = _fb.new_state()
+    state["refresh_token"] = "rf0"
+    state["id_token"] = "id0"
+    state["expires_at"] = 9000000000
+    state["time_valid"] = True
+    state["acc"] = {"hour": old_hour, "sum_t": 60.0, "sum_h": 150.0, "n": 3}
+    machine.RTC._memory = _fb.encode_rtc_state(state).encode("utf-8")
+    machine._reset_cause = machine.DEEPSLEEP_RESET
+
+    main.run_cycle()
+
+    deletes = [c for c in urequests.calls if c["method"] == "DELETE"]
+    assert len(deletes) == 1
+    assert f"/hourly/{now_hour - 86400}.json" in deletes[0]["url"]
+    new_state = _fb.decode_rtc_state(machine.RTC._memory)
+    assert new_state["acc"]["hour"] == now_hour
+    assert new_state["acc"]["n"] == 1
+
+
+def test_cycle_urequests_missing(monkeypatch) -> None:
+    """Без urequests цикл уходит в сон без падения."""
+    import machine
+
+    monkeypatch.setattr(main, "urequests", None)
+    main.run_cycle()
+    assert machine.sleep_calls == [60000]

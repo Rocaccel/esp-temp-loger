@@ -13,3 +13,7 @@ __pycache__/
 # Рантайм-данные с платы (создаются сами на ESP32)
 hourly.json
 settings.json
+
+# Локальные секреты в корне (не коммитить!)
+/config.toml
+/secrets.py

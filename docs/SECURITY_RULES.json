@@ -1,0 +1,24 @@
+{
+  "rules": {
+    "devices": {
+      "$dev": {
+        "current": {
+          ".read": true,
+          ".write": "auth != null",
+          ".validate": "newData.hasChildren(['temp', 'hum', 'ts'])"
+        },
+        "hourly": {
+          "$hour": {
+            ".read": true,
+            ".write": "auth != null",
+            ".validate": "newData.hasChildren(['temp', 'hum', 'count'])"
+          }
+        },
+        "settings": {
+          ".read": true,
+          ".write": "auth != null"
+        }
+      }
+    }
+  }
+}

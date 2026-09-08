@@ -4,6 +4,53 @@ import threading
 
 applied_freq = None
 
+PWRON_RESET = 1
+HARD_RESET = 2
+WDT_RESET = 3
+DEEPSLEEP_RESET = 4
+SOFT_RESET = 5
+
+_reset_cause = PWRON_RESET
+sleep_calls = []
+
+
+def reset_cause() -> int:
+    """Стаб machine.reset_cause().
+
+    Returns:
+        Заранее выставленная причина перезагрузки.
+    """
+    return _reset_cause
+
+
+def deepsleep(ms: int) -> None:
+    """Стаб machine.deepsleep(): записывает вызов, не спит.
+
+    Args:
+        ms: Время сна в миллисекундах.
+    """
+    sleep_calls.append(ms)
+
+
+class RTC:
+    """Стаб machine.RTC с общей памятью."""
+
+    _memory = b""
+
+    def memory(self, data: bytes | None = None):
+        """Читает или пишет RTC-память.
+
+        Args:
+            data: Байты для записи или None для чтения.
+
+        Returns:
+            Байты памяти при чтении.
+        """
+        if data is None:
+            return RTC._memory
+        RTC._memory = bytes(data)
+        return None
+
 
 def freq(value: int) -> None:
     """Стаб machine.freq(): запоминает запрошенную частоту CPU.

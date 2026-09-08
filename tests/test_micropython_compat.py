@@ -35,7 +35,7 @@ C_METHODS = frozenset(
     }
 )
 
-DEVICE_FILES = ("main.py", "telemetry.py")
+DEVICE_FILES = ("main.py", "telemetry.py", "fbsync.py")
 
 
 def _kwargs_violations(source: str) -> list:
