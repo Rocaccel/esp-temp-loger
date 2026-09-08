@@ -5,9 +5,18 @@
   firebase.initializeApp(window.FB_CONFIG);
   var DEV = window.FB_CONFIG.deviceId;
   var db = firebase.database();
-  var tz = 0;
+  var TZ_KEY = 'tz_offset';
   var lastHourly = [];
-  var tzInit = false;
+
+  function loadTz() {
+    try {
+      var saved = parseInt(localStorage.getItem(TZ_KEY), 10);
+      if (!isNaN(saved) && saved >= -12 && saved <= 14) return saved;
+    } catch (e) { /* localStorage недоступен — дефолт ниже */ }
+    return Math.round(-new Date().getTimezoneOffset() / 60);
+  }
+
+  var tz = loadTz();
 
   function pad2(n) {
     return String(n).padStart(2, '0');
@@ -145,15 +154,7 @@
     renderHourly();
   });
 
-  db.ref('devices/' + DEV + '/settings/tz').on('value', function (snap) {
-    var val = snap.val();
-    tz = (typeof val === 'number') ? val : 0;
-    if (!tzInit) {
-      document.getElementById('tz').value = tz;
-      tzInit = true;
-    }
-    renderHourly();
-  });
+  document.getElementById('tz').value = tz;
 
   document.getElementById('tzSave').addEventListener('click', function () {
     var msg = document.getElementById('tzMsg');
@@ -162,10 +163,11 @@
       msg.innerText = 'Нужно целое от -12 до +14';
       return;
     }
-    db.ref('devices/' + DEV + '/settings/tz').set(val).then(function () {
-      msg.innerText = 'Сохранено';
-    }).catch(function (e) {
-      msg.innerText = 'Ошибка: ' + e.message;
-    });
+    tz = val;
+    try {
+      localStorage.setItem(TZ_KEY, String(val));
+    } catch (e) { /* приватный режим — поправка до перезагрузки */ }
+    renderHourly();
+    msg.innerText = 'Сохранено в этом браузере';
   });
 })();

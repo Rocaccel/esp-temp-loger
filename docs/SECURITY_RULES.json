@@ -13,10 +13,6 @@
             ".write": "auth != null",
             ".validate": "newData.hasChildren(['temp', 'hum', 'count'])"
           }
-        },
-        "settings": {
-          ".read": true,
-          ".write": "auth != null"
         }
       }
     }
