@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# uv / venv
+.venv/
+
+# Pytest / Ruff / Pyright
+.pytest_cache/
+.ruff_cache/
+.pyright/
+
+# Рантайм-данные с платы (создаются сами на ESP32)
+hourly.json
+settings.json
