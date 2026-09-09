@@ -38,6 +38,7 @@ class WLAN:
         self._connected = False
         self._active = False
         self.pm_mode = None
+        self.static_cfg = None
 
     def config(self, *args, **kwargs) -> None:
         """Стаб network.WLAN.config(): запоминает параметры.
@@ -79,10 +80,31 @@ class WLAN:
         """
         return self._connected
 
-    def ifconfig(self) -> tuple:
-        """Возвращает фиктивную сетевую конфигурацию.
+    def ifconfig(self, cfg: tuple | None = None) -> tuple:
+        """Возвращает или задаёт сетевую конфигурацию.
+
+        Args:
+            cfg: Кортеж (ip, mask, gateway, dns) для статики или None.
 
         Returns:
             Кортеж (ip, mask, gateway, dns).
         """
+        if cfg is not None:
+            self.static_cfg = tuple(cfg)
+            return self.static_cfg
+        if self.static_cfg is not None:
+            return self.static_cfg
         return ("192.168.1.100", "255.255.255.0", "192.168.1.1", "8.8.8.8")
+
+    def status(self, param: str = "") -> int:
+        """Возвращает фиктивный статус.
+
+        Args:
+            param: Имя параметра (поддерживается 'rssi').
+
+        Returns:
+            -55 для rssi, иначе 0.
+        """
+        if param == "rssi":
+            return -55
+        return 0

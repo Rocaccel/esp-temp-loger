@@ -80,6 +80,46 @@ def build_bucket_payload(avg_temp: float, avg_hum: float, count: int) -> dict:
     return {"temp": avg_temp, "hum": avg_hum, "count": count}
 
 
+def build_health_payload(
+    wake_id: int,
+    reset_cause: int,
+    wifi_ms: int,
+    dht_fails: int,
+    mem_free: int,
+    rssi,
+    err: str,
+    ts_unix: int,
+    net_ms: int,
+) -> dict:
+    """Строит пейлоад диагностики цикла.
+
+    Args:
+        wake_id: Порядковый номер пробуждения (счётчик RTC).
+        reset_cause: Код machine.reset_cause().
+        wifi_ms: Длительность подключения Wi-Fi в мс.
+        dht_fails: Серия ошибок датчика подряд.
+        mem_free: Байт свободной RAM (gc.mem_free) или -1.
+        rssi: Уровень сигнала Wi-Fi или None.
+        err: Этап отказа ('dht', 'wifi', 'ntp', 'auth', 'send' или '').
+        ts_unix: Метка времени (Unix-эпоха).
+        net_ms: Суммарное сетевое время цикла в мс.
+
+    Returns:
+        Словарь для PUT в узел health.
+    """
+    return {
+        "wake": wake_id,
+        "rst": reset_cause,
+        "wifi_ms": wifi_ms,
+        "dht_fails": dht_fails,
+        "mem": mem_free,
+        "rssi": rssi,
+        "err": err,
+        "ts": ts_unix,
+        "net_ms": net_ms,
+    }
+
+
 def new_acc(hour_start: int) -> dict:
     """Создаёт пустой часовой аккумулятор.
 
@@ -270,6 +310,8 @@ def new_state() -> dict:
         "expires_at": 0,
         "acc": new_acc(0),
         "time_valid": False,
+        "wake_id": 0,
+        "dht_fails": 0,
     }
 
 
@@ -289,6 +331,8 @@ def encode_rtc_state(state: dict) -> str:
             "expires_at": state.get("expires_at", 0),
             "acc": state.get("acc", new_acc(0)),
             "time_valid": bool(state.get("time_valid", False)),
+            "wake_id": int(state.get("wake_id", 0)),
+            "dht_fails": int(state.get("dht_fails", 0)),
         }
     )
 
@@ -320,6 +364,8 @@ def decode_rtc_state(raw) -> dict:
             "n": int(acc.get("n", 0)),
         }
         state["time_valid"] = bool(data.get("time_valid", False))
+        state["wake_id"] = int(data.get("wake_id", 0))
+        state["dht_fails"] = int(data.get("dht_fails", 0))
         return state
     except (ValueError, KeyError, TypeError, AttributeError):
         return new_state()

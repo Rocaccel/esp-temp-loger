@@ -7,3 +7,6 @@ FIREBASE_DB_URL = "https://test.firebaseio.com"
 DEVICE_ID = "esp32-1"
 SLEEP_SEC = 60
 MDNS_HOSTNAME = "temp-logger"
+WDT_ENABLED = True
+WDT_TIMEOUT_MS = 90000
+NET_STATIC = ()

@@ -52,6 +52,27 @@ class RTC:
         return None
 
 
+class WDT:
+    """Стаб machine.WDT."""
+
+    instances: list = []
+
+    def __init__(self, id: int = 0, timeout: int = 5000) -> None:
+        """Запоминает таймаут.
+
+        Args:
+            id: Идентификатор сторожа (игнорируется).
+            timeout: Таймаут в мс.
+        """
+        self.timeout = timeout
+        self.fed = 0
+        WDT.instances.append(self)
+
+    def feed(self) -> None:
+        """Считает кормления."""
+        self.fed += 1
+
+
 def freq(value: int) -> None:
     """Стаб machine.freq(): запоминает запрошенную частоту CPU.
 

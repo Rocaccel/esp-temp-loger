@@ -13,6 +13,10 @@
             ".write": "auth != null",
             ".validate": "newData.hasChildren(['temp', 'hum', 'count'])"
           }
+        },
+        "health": {
+          ".read": true,
+          ".write": "auth != null"
         }
       }
     }

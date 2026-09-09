@@ -8,6 +8,7 @@ from fbsync import (
     auth_error_hint,
     build_bucket_payload,
     build_current_payload,
+    build_health_payload,
     decode_rtc_state,
     describe_http_error,
     encode_rtc_state,
@@ -187,3 +188,19 @@ def test_auth_error_hint_unknown() -> None:
     """Неизвестные ошибки без подсказок."""
     assert auth_error_hint("SOMETHING_ELSE") == ""
     assert auth_error_hint("") == ""
+
+
+def test_build_health_payload() -> None:
+    """Пейлоад диагностики содержит все поля цикла."""
+    payload = build_health_payload(7, 4, 1200, 0, 50000, -55, "", 1700000000, 3500)
+    assert payload == {
+        "wake": 7,
+        "rst": 4,
+        "wifi_ms": 1200,
+        "dht_fails": 0,
+        "mem": 50000,
+        "rssi": -55,
+        "err": "",
+        "ts": 1700000000,
+        "net_ms": 3500,
+    }

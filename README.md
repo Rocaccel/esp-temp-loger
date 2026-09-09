@@ -24,8 +24,8 @@ Database. Страница показаний живёт на GitHub Pages и о
    import mip
    mip.install("urequests")
    ```
-3. Скопируй в корень файловой системы платы 4 файла:
-   `main.py`, `fbsync.py`, `telemetry.py`, `secrets.py`
+3. Скопируй в корень файловой системы платы 5 файлов:
+   `main.py`, `fbsync.py`, `telemetry.py`, `https.py`, `secrets.py`
    (последний генерируется ниже, остальные — из репозитория).
 
 ## Firebase с нуля
@@ -58,14 +58,17 @@ uv run python tools/gen_secrets.py
 
 ```bash
 uv sync --group dev   # окружение и зависимости
-uv run pytest         # тесты (58, через стабы MicroPython-модулей)
+uv run pytest         # тесты (через стабы MicroPython-модулей)
 uv run ruff check .   # линтер
 uv run ruff format .  # форматирование
 uv run pyright        # типы
 ```
 
 - Код для платы: `main.py` (цикл замера), `fbsync.py` (Firebase REST,
-  auth, RTC-состояние), `telemetry.py` (чистая логика времени и истории).
+  auth, RTC-состояние), `telemetry.py` (чистая логика времени),
+  `https.py` (мини HTTPS-клиент с явными таймаутами вместо urequests —
+  зависший TLS без таймаута вешал плату навсегда; keep-alive сессии:
+  одно соединение на хост за цикл + один ретрай).
 - Тесты в `tests/`, стабы железа — в `tests/stubs/`.
 - В device-коде нельзя keyword-аргументы у C-методов MicroPython
   (`bytes.decode`, `socket.*`) — ловит `test_micropython_compat.py`.
@@ -83,13 +86,23 @@ uv run pyright        # типы
 
 - Плата спит (`machine.deepsleep`), просыпается каждые
   `sleep_sec` (по умолчанию 60).
-- Замер → Wi-Fi → refresh idToken (полный anon-signup только если
-  токена нет) → `PUT devices/<id>/current` → `PUT devices/<id>/hourly/<час>`
-  с бегущим средним из RTC-памяти → сон.
+- Замер → Wi-Fi (DHCP или статический IP из секции `[network]`) →
+  refresh idToken → `PUT devices/<id>/current` →
+  `PUT devices/<id>/hourly/<час>` с бегущим средним из RTC-памяти →
+  `PUT devices/<id>/health` с диагностикой цикла → сон.
 - При смене часа удаляется бакет старше 24 часов.
-- NTP-синхронизация — только на холодном старте, в пробуждениях
-  часы RTC идут сами.
-- Состояние между снами (токены, аккумулятор часа) — в `RTC.memory()`.
+- NTP-синхронизация — только на холодном старте.
+- Состояние между снами (токены, аккумулятор часа, счётчик
+  пробуждений, серия ошибок DHT) — в `RTC.memory()`.
+- Сторожевой таймер (`[watchdog]`, по умолчанию 90 сек) перезагружает
+  зависший цикл; в deep sleep сторож стоит. Таймаут должен превышать
+  сон + цикл.
+- После 3 ошибок датчика подряд объект DHT пересоздаётся
+  с паузой settle.
+- Health-узел: `wake` (номер пробуждения), `rst` (reset_cause),
+  `wifi_ms`, `dht_fails`, `mem`, `rssi`, `err` (этап отказа),
+  `ts`, `net_ms` (сетевое время цикла). По нему видна посмертная
+  сигнатура любого отказа.
 
 ## Диагностика по serial-логу
 
@@ -102,6 +115,7 @@ uv run pyright        # типы
 | `HTTP 404` | неверный `databaseURL` (регион базы?) |
 | `[SYS] Холодный старт` / `[SYS] Пробуждение из deep sleep` | причина старта |
 | `[DHT-ERR]` | датчик не отвечает, цикл пропущен, плата спит дальше |
+| `[WDT] Сторож: ...` | сторож запущен; тишина = выключен в конфиге или нет на прошивке |
 
 При любой auth-ошибке токены сбрасываются — следующий цикл делает
 полный signup сам, перезагрузка не нужна.
@@ -111,7 +125,8 @@ uv run pyright        # типы
 ```
 main.py                 цикл платы: замер → Firebase → deep sleep
 fbsync.py               REST Firebase, auth, RTC-состояние, аккумулятор часа
-telemetry.py            чистые функции времени/истории (общие)
+https.py                мини HTTPS-клиент с таймаутами (сокеты + TLS)
+telemetry.py            чистые функции времени (общие)
 secrets.py              генерируется, на плату (в git нет)
 config.toml             локальный конфиг (в git нет)
 config.example.toml     образец конфига

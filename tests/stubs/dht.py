@@ -2,6 +2,8 @@
 
 import random
 
+made = []
+
 
 class DHT22:
     """Минимальный стаб dht.DHT22 с псевдослучайными показаниями."""
@@ -12,6 +14,7 @@ class DHT22:
         Args:
             pin: Объект пина (игнорируется, хранится для отладки).
         """
+        made.append(pin)
         self.pin = pin
         self._temperature = 22.5
         self._humidity = 55.0

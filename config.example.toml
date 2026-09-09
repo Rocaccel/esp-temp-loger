@@ -13,5 +13,19 @@ device_id = "esp32-1"
 [power]
 sleep_sec = 60
 
+[watchdog]
+# Сторож на цикл. В deep sleep сторож стоит, таймаут должен
+# превышать сон + цикл, иначе ребуты вместо сна.
+enabled = true
+timeout_ms = 90000
+
+[network]
+# Пустые строки = DHCP. Заполни все 4 для статического IP
+# (убирает DHCP с каждого пробуждения).
+static_ip = ""
+static_mask = ""
+static_gw = ""
+static_dns = ""
+
 [device]
 mdns_hostname = "temp-logger"
