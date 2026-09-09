@@ -2,8 +2,6 @@
 
 import threading
 
-applied_freq = None
-
 PWRON_RESET = 1
 HARD_RESET = 2
 WDT_RESET = 3
@@ -71,16 +69,6 @@ class WDT:
     def feed(self) -> None:
         """Считает кормления."""
         self.fed += 1
-
-
-def freq(value: int) -> None:
-    """Стаб machine.freq(): запоминает запрошенную частоту CPU.
-
-    Args:
-        value: Частота в Гц.
-    """
-    global applied_freq
-    applied_freq = value
 
 
 class Pin:

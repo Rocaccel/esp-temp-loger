@@ -37,17 +37,7 @@ class WLAN:
         """
         self._connected = False
         self._active = False
-        self.pm_mode = None
         self.static_cfg = None
-
-    def config(self, *args, **kwargs) -> None:
-        """Стаб network.WLAN.config(): запоминает параметры.
-
-        Args:
-            *args: Позиционные параметры (игнорируются).
-            **kwargs: Именованные параметры (запоминаются).
-        """
-        self.pm_mode = kwargs.get("pm", self.pm_mode)
 
     def active(self, state: bool | None = None) -> bool:
         """Включает/выключает интерфейс или возвращает состояние.
