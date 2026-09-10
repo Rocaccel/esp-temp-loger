@@ -1,6 +1,12 @@
 {
   "rules": {
-    "devices": {
+    "lists": {
+      "$listId": {
+        ".read": true,
+        ".write": true
+      }
+    },
+  "devices": {
       "$dev": {
         "current": {
           ".read": true,
